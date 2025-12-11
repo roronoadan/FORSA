@@ -1,6 +1,9 @@
-numpy==2.1.3
-pandas==2.2.3
-scikit-learn==1.5.2
+# Colab-safe pinned versions (Python 3.12 wheels available)
+# - matches google-colab pandas pin
+# - satisfies numba (numpy < 2.1) and umap-learn (sklearn >= 1.6) if present
+numpy==2.0.2
+pandas==2.2.2
+scikit-learn==1.7.1
 scipy==1.14.1
 tqdm==4.67.1
 

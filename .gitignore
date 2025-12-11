@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Environments
+.venv/
+venv/
+env/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data (keep datasets in Drive, not in git)
+call-center/*.csv
+clients-satisfaction/*.csv
+
+# Outputs / artifacts
+forca-hack/outputs/
+
+

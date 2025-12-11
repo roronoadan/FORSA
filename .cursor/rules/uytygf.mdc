@@ -1,0 +1,128 @@
+---
+alwaysApply: true
+---
+roject: "FORSAtic — Intelligent Customer Complaints Processing (Algérie Télécom)"
+source: "v_Reclamations_Guide_Complet.pdf"
+
+rules:
+
+title: "Improve Customer Satisfaction with AI and Complaint Analysis"
+
+event_dates: "11 - 13 December 2025"
+
+context: >
+Algérie Télécom receives thousands of customer comments every day from multiple channels:
+social media (Facebook, Twitter, ...) and the call center. These messages contain valuable
+signals about satisfaction, outages, suggestions and delays, but their volume and diversity
+make manual analysis impossible. This hackathon aims to leverage Artificial Intelligence
+to automate and optimize the handling of these complaints.
+
+objectives:
+
+"Analyze and classify customer comments by type and urgency."
+
+"Help support and communications teams prioritize critical complaints."
+
+"Provide real-time indicators and visualizations of satisfaction trends."
+
+competition_structure:
+
+"The hackathon includes two distinct challenges, corresponding to the two main sources of customer data."
+
+"Challenge 1 — Social Media Comments Classification:"
+
+" • Data source: comments extracted from social media (Facebook, Twitter...)."
+
+" • Total volume: ~30,000 comments."
+
+" • CSV format: columns «comment», «platform», «class»."
+
+"Challenge 2 — Call Center Tickets Classification:"
+
+" • Data source: complaint tickets recorded via the call center management system."
+
+" • CSV format: structured data with column «class_int»."
+
+" • Number of classes: 6."
+
+" • Call center ticket fields include: ticket ID (SNHandle), date/time (timeTT), status, processing department, service type, subscription level, service content, technical/commercial type, technology (ADSL/FTTH/4G), and location (Wilaya/ACTEL)."
+
+participation:
+
+"Team composition: 5 members per team."
+
+"Each team must designate a team leader as the contact point."
+
+"All teams must join the competitions on Kaggle and add all their members to a single team at the start of the hackathon."
+
+kaggle_competitions:
+
+"Two separate Kaggle competitions:"
+
+" • Competition 1: Social media comments classification (9 classes)."
+
+" • Competition 2: Call center tickets classification (6 classes)."
+
+"Evaluation metric: Macro F1-Score."
+
+"Important: Teams must participate in both competitions. The final ranking will be based on the average of the F1-scores obtained on the two challenges."
+
+required_submissions:
+
+"Submit via the official Google Form:"
+
+" 1. Full source code (Model + Inference code) — Jupyter notebooks, Python scripts, etc. — Mandatory."
+
+" 2. Technical report describing methodology, models used, and results — Mandatory."
+
+" 3. Presentation slides for the defense — Optional."
+
+selection_and_evaluation:
+
+"Phase 1 — Kaggle competitions (Quantitative):"
+
+" • Teams submit predictions on Kaggle for both challenges."
+
+" • The final score is the arithmetic mean of the accuracies of the two competitions."
+
+" • The top 10 teams by this average score are selected for the final phase."
+
+"Phase 2 — Jury presentation (Qualitative):"
+
+" • The 10 finalist teams present their solution to a panel of experts."
+
+" • Presentation duration: 10 minutes per team (including Q&A)."
+
+" • The jury selects the top 3 winning teams based on the criteria below."
+
+jury_evaluation_criteria:
+
+"1. Model accuracy and performance — accuracy, robustness, generalization."
+
+"2. Methodology and technical approach — algorithm choice, preprocessing, validation."
+
+"3. Innovation and originality — creativity of the proposed solution."
+
+"4. Relevance and business impact — applicability for Algérie Télécom."
+
+"5. Presentation quality — clarity, design, persuasiveness."
+
+suggested_innovation_tracks:
+
+"1. Intelligent multi-modal classification: develop a unified AI model capable of handling both data types."
+
+"2. Analytical dashboard: visualize customer satisfaction and urgencies in real time."
+
+"3. Trend analysis: identify dominant topics and anticipate dissatisfaction."
+
+"4. Automatic urgency detection: automatically prioritize critical complaints."
+
+"5.Dialectal NLP: adapt models to users' specific language (Darija, mixed Arabic-French)."
+
+resources_and_support:
+
+"Datasets will be provided in CSV format via the Kaggle competitions."
+
+"Documentation and data examples available on Day 1."
+
+"Mentors and experts available to support teams."

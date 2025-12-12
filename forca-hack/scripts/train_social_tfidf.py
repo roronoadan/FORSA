@@ -212,6 +212,7 @@ def main() -> None:
         help="How to predict test: full=fit once on all data, fold_ensemble=avg probs across CV folds.",
     )
     ap.add_argument("--save_artifacts", action="store_true", help="Save CV artifacts (confusion matrix, per-class F1, configs).")
+    ap.add_argument("--save_test_proba", action="store_true", help="Save final test probabilities to .npy for blending.")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -453,6 +454,7 @@ def main() -> None:
             save_cv_artifacts(cfg=cfg, oof_pred=oof_pred, tag=f"rank{rank+1}_macro{score:.5f}")
 
         test_pred = classes[np.argmax(test_proba_sum / top_k, axis=1)]
+        final_proba = test_proba_sum / top_k
         out_name = f"submission_social_best_top{top_k}.csv"
     else:
         cfg = {"use_word": use_word, "C": float(args.C)}
@@ -460,6 +462,7 @@ def main() -> None:
         score, proba, oof_pred = run_cv_and_maybe_predict(cfg, do_predict=True)
         assert proba is not None
         test_pred = classes[np.argmax(proba, axis=1)]
+        final_proba = proba
         out_name = "submission_social_tfidf.csv"
         save_cv_artifacts(cfg=cfg, oof_pred=oof_pred, tag=f"single_macro{score:.5f}")
 
@@ -467,6 +470,18 @@ def main() -> None:
     sub_path = out_dir / out_name
     sub.to_csv(sub_path, index=False, encoding="utf-8")
     print(f"Saved submission: {sub_path}")
+
+    if args.save_test_proba:
+        npy_path = out_dir / (out_name.replace(".csv", "_proba.npy"))
+        meta_path = out_dir / (out_name.replace(".csv", "_proba_meta.json"))
+        np.save(npy_path, final_proba.astype(np.float32))
+        meta = {
+            "classes": [int(c) for c in classes.tolist()],
+            "source": "train_social_tfidf.py",
+            "out_csv": out_name,
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Saved test proba: {npy_path} + {meta_path}")
 
 
 if __name__ == "__main__":

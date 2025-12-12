@@ -92,6 +92,7 @@ def main() -> None:
     ap.add_argument("--weight_decay", type=float, default=0.01)
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--fold_ensemble", action="store_true", help="Train K folds and average probabilities for test.")
+    ap.add_argument("--save_test_proba", action="store_true", help="Save test probabilities to .npy for blending.")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -254,6 +255,15 @@ def main() -> None:
     out_path = out_dir / "submission_social_transformer.csv"
     sub.to_csv(out_path, index=False, encoding="utf-8")
     print(f"Saved submission: {out_path}")
+
+    if args.save_test_proba:
+        proba = (test_proba_sum / (args.n_splits if args.fold_ensemble else 1)).astype(np.float32)
+        npy_path = out_dir / "submission_social_transformer_proba.npy"
+        meta_path = out_dir / "submission_social_transformer_proba_meta.json"
+        np.save(npy_path, proba)
+        meta = {"classes": [int(lm.id_to_label[i]) for i in range(num_labels)], "source": "train_social_transformer.py"}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Saved test proba: {npy_path} + {meta_path}")
 
 
 if __name__ == "__main__":

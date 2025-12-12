@@ -42,4 +42,58 @@ Adjust the CSV paths if your Drive folder differs.
 #### 3) Upload to Kaggle
 - The generated file is: `forca-hack/outputs/submission_social_tfidf.csv`
 
+### Upgrades (Social comments)
+
+#### A) Stronger TF-IDF search + ensemble (recommended)
+
+```bash
+!python forca-hack/scripts/train_social_tfidf.py \
+  --train_csv clients-satisfaction/train.csv \
+  --test_csv clients-satisfaction/test_file.csv \
+  --out_dir forca-hack/outputs \
+  --n_splits 5 \
+  --search --search_mode medium \
+  --ensemble_top_k 8 \
+  --predict_strategy fold_ensemble \
+  --save_artifacts
+```
+
+To also include calibrated Linear SVM in the search (slower):
+
+```bash
+!python forca-hack/scripts/train_social_tfidf.py \
+  --train_csv clients-satisfaction/train.csv \
+  --test_csv clients-satisfaction/test_file.csv \
+  --out_dir forca-hack/outputs \
+  --n_splits 5 \
+  --search --search_mode medium \
+  --include_svm \
+  --ensemble_top_k 8 \
+  --predict_strategy fold_ensemble \
+  --save_artifacts
+```
+
+#### B) Transformer fine-tuning (optional "big jump")
+
+Install extra deps:
+
+```bash
+!pip -q install -r forca-hack/requirements-transformers.txt
+```
+
+Run:
+
+```bash
+!python forca-hack/scripts/train_social_transformer.py \
+  --train_csv clients-satisfaction/train.csv \
+  --test_csv clients-satisfaction/test_file.csv \
+  --out_dir forca-hack/outputs \
+  --model_name xlm-roberta-base \
+  --n_splits 5 \
+  --fold_ensemble \
+  --fp16
+```
+
+Submission will be: `forca-hack/outputs/submission_social_transformer.csv`
+
 

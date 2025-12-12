@@ -1,0 +1,6 @@
+# Optional (only needed for `train_social_transformer.py`)
+torch>=2.2
+transformers>=4.41
+accelerate>=0.30
+sentencepiece>=0.2
+

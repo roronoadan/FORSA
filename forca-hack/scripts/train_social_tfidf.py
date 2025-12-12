@@ -11,6 +11,8 @@ import pandas as pd
 from sklearn.pipeline import FeatureUnion
 from sklearn.linear_model import LogisticRegression
 from sklearn.linear_model import SGDClassifier
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold
@@ -122,6 +124,7 @@ def make_model(
     C: float = 4.0,
     clf: str = "lr",
     alpha: float = 1e-5,
+    calib_cv: int = 3,
 ) -> Pipeline:
     if use_word:
         feats = FeatureUnion(
@@ -164,6 +167,10 @@ def make_model(
             random_state=seed,
             class_weight="balanced",
         )
+    elif clf == "svm":
+        # Linear SVM is often very strong on TF-IDF; we calibrate to get predict_proba for blending.
+        base = LinearSVC(C=float(C), class_weight="balanced", random_state=seed)
+        classifier = CalibratedClassifierCV(base, cv=int(calib_cv), method="sigmoid")
     else:
         raise ValueError(f"Unknown clf: {clf} (expected 'lr' or 'sgd')")
 
@@ -184,6 +191,11 @@ def main() -> None:
     ap.add_argument("--no_word", action="store_true", help="Disable word TF-IDF (char-only).")
     ap.add_argument("--C", type=float, default=6.0)
     ap.add_argument("--search", action="store_true", help="Try a small set of strong configs and keep the best.")
+    ap.add_argument(
+        "--include_svm",
+        action="store_true",
+        help="Include calibrated LinearSVC in --search candidates (slower but can boost leaderboard).",
+    )
     ap.add_argument(
         "--search_mode",
         type=str,
@@ -333,37 +345,33 @@ def main() -> None:
             char_only: list[dict] = []
             char_word: list[dict] = []
 
+            clfs = ["lr", "sgd"]
+            if args.include_svm:
+                clfs.append("svm")
+
             # Char-only configs
             for C, min_df, char_ngram, cfeat in itertools.product(Cs, min_dfs, char_ngrams, char_feats):
-                char_only.append(
-                    {
+                for clf_name in clfs:
+                    cfg = {
                         "use_word": False,
                         "char_ngram": char_ngram,
                         "min_df": int(min_df),
                         "C": float(C),
                         "char_max_features": int(cfeat),
-                        "clf": "lr",
+                        "clf": clf_name,
                     }
-                )
-                # Add a complementary classifier variant for ensembles
-                char_only.append(
-                    {
-                        "use_word": False,
-                        "char_ngram": char_ngram,
-                        "min_df": int(min_df),
-                        "C": float(C),
-                        "char_max_features": int(cfeat),
-                        "clf": "sgd",
-                        "alpha": 1e-5,
-                    }
-                )
+                    if clf_name == "sgd":
+                        cfg["alpha"] = 1e-5
+                    if clf_name == "svm":
+                        cfg["calib_cv"] = 3
+                    char_only.append(cfg)
 
             # Char+word configs (keep word settings moderate)
             for C, min_df, char_ngram, word_ngram, cfeat, wfeat in itertools.product(
                 Cs, min_dfs, char_ngrams, word_ngrams, char_feats, word_feats
             ):
-                char_word.append(
-                    {
+                for clf_name in clfs:
+                    cfg = {
                         "use_word": True,
                         "char_ngram": char_ngram,
                         "word_ngram": word_ngram,
@@ -371,22 +379,13 @@ def main() -> None:
                         "C": float(C),
                         "char_max_features": int(cfeat),
                         "word_max_features": int(wfeat),
-                        "clf": "lr",
+                        "clf": clf_name,
                     }
-                )
-                char_word.append(
-                    {
-                        "use_word": True,
-                        "char_ngram": char_ngram,
-                        "word_ngram": word_ngram,
-                        "min_df": int(min_df),
-                        "C": float(C),
-                        "char_max_features": int(cfeat),
-                        "word_max_features": int(wfeat),
-                        "clf": "sgd",
-                        "alpha": 1e-5,
-                    }
-                )
+                    if clf_name == "sgd":
+                        cfg["alpha"] = 1e-5
+                    if clf_name == "svm":
+                        cfg["calib_cv"] = 3
+                    char_word.append(cfg)
 
             # Deterministic order (helps reproducibility)
             def _key(d: dict) -> tuple:

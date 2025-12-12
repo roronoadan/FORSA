@@ -72,6 +72,18 @@ def main() -> None:
     if n_models not in (1, 2, 3):
         raise ValueError("This script supports 1-3 models.")
 
+    # Check all files exist before proceeding
+    all_paths = list(oof_paths) + list(oof_meta_paths) + list(test_paths) + list(test_meta_paths)
+    missing = [p for p in all_paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing required files:\n" + "\n".join(f"  - {p}" for p in missing) +
+            f"\n\n💡 TIP: Run training scripts with --save_oof_proba and --save_test_proba flags first.\n"
+            f"   Example:\n"
+            f"   python forca-hack/scripts/train_social_tfidf.py ... --save_oof_proba --save_test_proba\n"
+            f"   python forca-hack/scripts/train_social_transformer.py ... --save_oof_proba --save_test_proba"
+        )
+
     # Canonical class order from first meta
     classes = load_meta(oof_meta_paths[0])
     num_classes = len(classes)

@@ -200,8 +200,20 @@ def main() -> None:
         "--search_mode",
         type=str,
         default="small",
-        choices=["small", "medium", "large"],
-        help="How wide the TF-IDF config search should be (only used with --search).",
+        choices=["small", "medium", "large", "optuna"],
+        help="How wide the TF-IDF config search should be. 'optuna' uses Bayesian optimization (requires optuna).",
+    )
+    ap.add_argument(
+        "--n_trials",
+        type=int,
+        default=50,
+        help="Number of trials for Optuna search (only used with --search_mode optuna).",
+    )
+    ap.add_argument(
+        "--optuna_timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds for Optuna search (None = no timeout).",
     )
     ap.add_argument("--ensemble_top_k", type=int, default=1, help="If >1 and --search, ensemble top-k configs.")
     ap.add_argument(
@@ -338,8 +350,114 @@ def main() -> None:
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.search:
-        # Search space: keep "small" fast; medium/large explore more without exploding runtime.
-        if args.search_mode == "small":
+        # Optuna-based Bayesian optimization (most efficient)
+        if args.search_mode == "optuna":
+            try:
+                import optuna
+            except ImportError:
+                raise ImportError(
+                    "Optuna not installed. Install with: pip install optuna\n"
+                    "Or use --search_mode small/medium/large for grid search."
+                )
+            
+            print(f"\n== Optuna Bayesian Optimization ({args.n_trials} trials) ==")
+            
+            def objective(trial: optuna.Trial) -> float:
+                # Suggest hyperparameters
+                use_word = trial.suggest_categorical("use_word", [True, False])
+                C = trial.suggest_float("C", 0.5, 16.0, log=True)
+                min_df = trial.suggest_int("min_df", 1, 3)
+                
+                if use_word:
+                    char_ngram_min = trial.suggest_int("char_ngram_min", 3, 4)
+                    char_ngram_max = trial.suggest_int("char_ngram_max", char_ngram_min + 1, 8)
+                    char_ngram = (char_ngram_min, char_ngram_max)
+                    word_ngram_min = trial.suggest_int("word_ngram_min", 1, 2)
+                    word_ngram_max = trial.suggest_int("word_ngram_max", word_ngram_min + 1, 4)
+                    word_ngram = (word_ngram_min, word_ngram_max)
+                    char_max_features = trial.suggest_categorical("char_max_features", [150_000, 200_000, 300_000, 400_000])
+                    word_max_features = trial.suggest_categorical("word_max_features", [60_000, 80_000, 120_000, 180_000])
+                else:
+                    char_ngram_min = trial.suggest_int("char_ngram_min", 3, 4)
+                    char_ngram_max = trial.suggest_int("char_ngram_max", char_ngram_min + 1, 8)
+                    char_ngram = (char_ngram_min, char_ngram_max)
+                    word_ngram = (1, 1)  # dummy
+                    char_max_features = trial.suggest_categorical("char_max_features", [200_000, 300_000, 400_000])
+                    word_max_features = 0  # dummy
+                
+                clf_name = trial.suggest_categorical("clf", ["lr", "sgd"] + (["svm"] if args.include_svm else []))
+                
+                cfg = {
+                    "use_word": use_word,
+                    "C": float(C),
+                    "min_df": int(min_df),
+                    "char_ngram": char_ngram,
+                    "word_ngram": word_ngram,
+                    "char_max_features": int(char_max_features),
+                    "word_max_features": int(word_max_features),
+                    "clf": clf_name,
+                }
+                if clf_name == "sgd":
+                    cfg["alpha"] = trial.suggest_float("alpha", 1e-6, 1e-4, log=True)
+                if clf_name == "svm":
+                    cfg["calib_cv"] = 3
+                
+                # Evaluate config
+                score, _, _, _ = run_cv_and_maybe_predict(cfg, do_predict=False)
+                return float(score)
+            
+            # Create study
+            study = optuna.create_study(
+                direction="maximize",
+                study_name=f"social_tfidf_{args.seed}",
+                sampler=optuna.samplers.TPESampler(seed=args.seed),
+            )
+            
+            # Optimize
+            study.optimize(
+                objective,
+                n_trials=args.n_trials,
+                timeout=args.optuna_timeout,
+                show_progress_bar=True,
+            )
+            
+            # Get best trials (sorted by value descending)
+            print(f"\n== Optuna Results (top {args.ensemble_top_k}) ==")
+            best_trials = sorted(study.trials, key=lambda t: t.value if t.value is not None else -1, reverse=True)
+            scores: list[tuple[float, dict]] = []
+            for trial in best_trials[:args.ensemble_top_k]:
+                if trial.value is None:
+                    continue
+                cfg = trial.params.copy()
+                # Convert to proper types
+                cfg["use_word"] = bool(cfg["use_word"])
+                cfg["C"] = float(cfg["C"])
+                cfg["min_df"] = int(cfg["min_df"])
+                cfg["char_ngram"] = (int(cfg["char_ngram_min"]), int(cfg["char_ngram_max"]))
+                if cfg["use_word"]:
+                    cfg["word_ngram"] = (int(cfg["word_ngram_min"]), int(cfg["word_ngram_max"]))
+                else:
+                    cfg["word_ngram"] = (1, 1)
+                cfg["char_max_features"] = int(cfg["char_max_features"])
+                if cfg["use_word"]:
+                    cfg["word_max_features"] = int(cfg["word_max_features"])
+                else:
+                    cfg["word_max_features"] = 0
+                cfg["clf"] = str(cfg["clf"])
+                if "alpha" in cfg:
+                    cfg["alpha"] = float(cfg["alpha"])
+                if cfg["clf"] == "svm":
+                    cfg["calib_cv"] = 3
+                # Remove helper keys
+                for k in ["char_ngram_min", "char_ngram_max", "word_ngram_min", "word_ngram_max"]:
+                    cfg.pop(k, None)
+                scores.append((float(trial.value), cfg))
+                print(f"Trial {trial.number}: macro_f1={trial.value:.5f} cfg={cfg}")
+            
+            scores.sort(key=lambda x: x[0], reverse=True)
+        
+        # Grid search modes (original approach)
+        elif args.search_mode == "small":
             candidates: list[dict] = [
                 # char-only
                 {"use_word": False, "char_ngram": (3, 6), "min_df": 2, "C": 6.0},
@@ -445,14 +563,15 @@ def main() -> None:
                 f"Search mode={args.search_mode} candidates={len(candidates)} "
                 f"(char_only={len(char_only_sel)}, char_word={len(char_word_sel)})"
             )
+            
+            # Grid search: evaluate all candidates
+            scores: list[tuple[float, dict]] = []
+            for i, cfg in enumerate(candidates, start=1):
+                print(f"\n== Search config {i}/{len(candidates)}: {cfg} ==")
+                score, _, _oof, _ = run_cv_and_maybe_predict(cfg, do_predict=False)
+                scores.append((score, cfg))
 
-        scores: list[tuple[float, dict]] = []
-        for i, cfg in enumerate(candidates, start=1):
-            print(f"\n== Search config {i}/{len(candidates)}: {cfg} ==")
-            score, _, _oof, _ = run_cv_and_maybe_predict(cfg, do_predict=False)
-            scores.append((score, cfg))
-
-        scores.sort(key=lambda x: x[0], reverse=True)
+            scores.sort(key=lambda x: x[0], reverse=True)
 
         # Deduplicate near-identical configs so the ensemble isn't wasted on the same model twice.
         def _sig(cfg: dict) -> tuple:

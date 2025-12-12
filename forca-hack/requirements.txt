@@ -6,4 +6,6 @@ pandas==2.2.2
 scikit-learn==1.7.1
 scipy==1.14.1
 tqdm==4.67.1
+# Optional: optuna for Bayesian hyperparameter optimization
+# Install with: pip install optuna (if using --search_mode optuna)
 

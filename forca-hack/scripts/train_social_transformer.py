@@ -13,6 +13,7 @@ import torch
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Dataset
+import inspect
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -74,6 +75,26 @@ def compute_metrics_fn(eval_pred):
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=1)
     return {"macro_f1": float(f1_score(labels, preds, average="macro"))}
+
+
+def make_training_args(**kwargs) -> TrainingArguments:
+    """
+    Compatibility shim across Transformers versions.
+    Newer versions may rename `evaluation_strategy` -> `eval_strategy`.
+    We map/strip unsupported keys automatically.
+    """
+    sig = inspect.signature(TrainingArguments.__init__)
+    params = set(sig.parameters.keys())
+
+    # Handle rename: evaluation_strategy -> eval_strategy
+    if "evaluation_strategy" in kwargs and "evaluation_strategy" not in params and "eval_strategy" in params:
+        kwargs["eval_strategy"] = kwargs.pop("evaluation_strategy")
+    if "eval_strategy" in kwargs and "eval_strategy" not in params and "evaluation_strategy" in params:
+        kwargs["evaluation_strategy"] = kwargs.pop("eval_strategy")
+
+    # Filter unsupported keys (keeps script running even if HF changes)
+    filtered = {k: v for k, v in kwargs.items() if k in params}
+    return TrainingArguments(**filtered)
 
 
 def main() -> None:
@@ -160,7 +181,7 @@ def main() -> None:
         test_ds = TextClsDataset(X_test, None, tokenizer, args.max_len)
 
         run_name = f"social_tr_{Path(args.model_name).name}_fold{fold_idx}"
-        training_args = TrainingArguments(
+        training_args = make_training_args(
             output_dir=str(out_dir / run_name),
             report_to="none",
             num_train_epochs=float(args.epochs),
@@ -221,7 +242,7 @@ def main() -> None:
         full_ds = TextClsDataset(X, [int(v) for v in y.tolist()], tokenizer, args.max_len)
         test_ds = TextClsDataset(X_test, None, tokenizer, args.max_len)
 
-        training_args = TrainingArguments(
+        training_args = make_training_args(
             output_dir=str(out_dir / f"social_tr_{Path(args.model_name).name}_full"),
             report_to="none",
             num_train_epochs=float(args.epochs),

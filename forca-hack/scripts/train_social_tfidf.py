@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import itertools
 from pathlib import Path
 
 import numpy as np
@@ -164,6 +165,13 @@ def main() -> None:
     ap.add_argument("--no_word", action="store_true", help="Disable word TF-IDF (char-only).")
     ap.add_argument("--C", type=float, default=6.0)
     ap.add_argument("--search", action="store_true", help="Try a small set of strong configs and keep the best.")
+    ap.add_argument(
+        "--search_mode",
+        type=str,
+        default="small",
+        choices=["small", "medium", "large"],
+        help="How wide the TF-IDF config search should be (only used with --search).",
+    )
     ap.add_argument("--ensemble_top_k", type=int, default=1, help="If >1 and --search, ensemble top-k configs.")
     ap.add_argument(
         "--predict_strategy",
@@ -283,15 +291,57 @@ def main() -> None:
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.search:
-        candidates: list[dict] = [
-            # char-only
-            {"use_word": False, "char_ngram": (3, 6), "min_df": 2, "C": 6.0},
-            {"use_word": False, "char_ngram": (3, 7), "min_df": 1, "C": 6.0},
-            # char + word
-            {"use_word": True, "char_ngram": (3, 6), "word_ngram": (1, 2), "min_df": 2, "C": 6.0},
-            {"use_word": True, "char_ngram": (3, 6), "word_ngram": (1, 3), "min_df": 2, "C": 6.0},
-            {"use_word": True, "char_ngram": (3, 7), "word_ngram": (1, 2), "min_df": 1, "C": 8.0},
-        ]
+        # Search space: keep "small" fast; medium/large explore more without exploding runtime.
+        if args.search_mode == "small":
+            candidates: list[dict] = [
+                # char-only
+                {"use_word": False, "char_ngram": (3, 6), "min_df": 2, "C": 6.0},
+                {"use_word": False, "char_ngram": (3, 7), "min_df": 1, "C": 6.0},
+                # char + word
+                {"use_word": True, "char_ngram": (3, 6), "word_ngram": (1, 2), "min_df": 2, "C": 6.0},
+                {"use_word": True, "char_ngram": (3, 6), "word_ngram": (1, 3), "min_df": 2, "C": 6.0},
+                {"use_word": True, "char_ngram": (3, 7), "word_ngram": (1, 2), "min_df": 1, "C": 8.0},
+            ]
+        else:
+            # Medium/Large: broaden a bit. Note: dataset is small, so this is still manageable in Colab.
+            Cs = [2.0, 4.0, 6.0, 8.0, 12.0] if args.search_mode == "medium" else [1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]
+            min_dfs = [1, 2] if args.search_mode == "medium" else [1, 2, 3]
+            char_ngrams = [(3, 5), (3, 6), (3, 7), (4, 7)] if args.search_mode == "medium" else [(3, 5), (3, 6), (3, 7), (3, 8), (4, 7), (4, 8)]
+            word_ngrams = [(1, 2), (1, 3)] if args.search_mode == "medium" else [(1, 2), (1, 3), (2, 4)]
+            char_feats = [200_000, 300_000] if args.search_mode == "medium" else [200_000, 300_000, 400_000]
+            word_feats = [80_000, 120_000] if args.search_mode == "medium" else [80_000, 120_000, 180_000]
+
+            candidates = []
+
+            # Char-only configs
+            for C, min_df, char_ngram, cfeat in itertools.product(Cs, min_dfs, char_ngrams, char_feats):
+                candidates.append(
+                    {"use_word": False, "char_ngram": char_ngram, "min_df": int(min_df), "C": float(C), "char_max_features": int(cfeat)}
+                )
+
+            # Char+word configs (keep word settings moderate)
+            for C, min_df, char_ngram, word_ngram, cfeat, wfeat in itertools.product(
+                Cs, min_dfs, char_ngrams, word_ngrams, char_feats, word_feats
+            ):
+                candidates.append(
+                    {
+                        "use_word": True,
+                        "char_ngram": char_ngram,
+                        "word_ngram": word_ngram,
+                        "min_df": int(min_df),
+                        "C": float(C),
+                        "char_max_features": int(cfeat),
+                        "word_max_features": int(wfeat),
+                    }
+                )
+
+            # Deterministic order (helps reproducibility)
+            candidates.sort(key=lambda d: (d["use_word"], d.get("char_ngram"), d.get("word_ngram", (0, 0)), d["min_df"], d["C"]))
+            # Safety cap to keep runtime bounded
+            cap = 60 if args.search_mode == "medium" else 120
+            if len(candidates) > cap:
+                candidates = candidates[:cap]
+            print(f"Search mode={args.search_mode} candidates={len(candidates)}")
 
         scores: list[tuple[float, dict]] = []
         for i, cfg in enumerate(candidates, start=1):

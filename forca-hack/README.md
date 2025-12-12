@@ -81,6 +81,10 @@ Install extra deps:
 !pip -q install -r forca-hack/requirements-transformers.txt
 ```
 
+IMPORTANT (Colab): enable GPU first:
+- Runtime -> Change runtime type -> **GPU**
+- Then restart runtime
+
 Run:
 
 ```bash

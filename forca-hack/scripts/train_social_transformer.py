@@ -156,6 +156,15 @@ def main() -> None:
 
     num_labels = len(lm.label_to_id)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        print(
+            "WARNING: device=cpu. Transformer training will be extremely slow.\n"
+            "- In Colab: Runtime -> Change runtime type -> GPU, then restart runtime.\n"
+            "- Also avoid `pip install torch` (it may install CPU-only torch)."
+        )
+    if device != "cuda" and args.fp16:
+        print("NOTE: fp16 requested but CUDA is not available; disabling fp16.")
+        args.fp16 = False
     print(f"device={device} model={args.model_name} num_labels={num_labels}")
 
     skf = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)

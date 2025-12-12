@@ -1,5 +1,11 @@
 # Optional (only needed for `train_social_transformer.py`)
-torch>=2.2
+#
+# IMPORTANT (Colab/Kaggle):
+# - PyTorch is already installed (with CUDA when you enable GPU).
+# - Installing `torch` via pip often pulls a CPU-only wheel and disables GPU.
+# So we intentionally DO NOT pin/install torch here.
+#
+# If you run locally, install the correct torch build separately.
 transformers>=4.41
 accelerate>=0.30
 sentencepiece>=0.2

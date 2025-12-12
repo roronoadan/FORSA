@@ -213,6 +213,7 @@ def main() -> None:
     )
     ap.add_argument("--save_artifacts", action="store_true", help="Save CV artifacts (confusion matrix, per-class F1, configs).")
     ap.add_argument("--save_test_proba", action="store_true", help="Save final test probabilities to .npy for blending.")
+    ap.add_argument("--save_oof_proba", action="store_true", help="Save OOF probabilities to .npy for blend-weight tuning.")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -262,8 +263,13 @@ def main() -> None:
 
     def run_cv_and_maybe_predict(
         cfg: dict, *, do_predict: bool
-    ) -> tuple[float, np.ndarray | None, np.ndarray]:
+    ) -> tuple[float, np.ndarray | None, np.ndarray, np.ndarray | None]:
         oof = np.empty_like(y)
+        oof_proba = (
+            np.zeros((X.shape[0], classes.shape[0]), dtype=np.float64)
+            if (do_predict and args.save_oof_proba)
+            else None
+        )
         fold_scores: list[float] = []
         test_proba_sum = np.zeros((X_test.shape[0], classes.shape[0]), dtype=np.float64) if do_predict else None
 
@@ -275,6 +281,15 @@ def main() -> None:
             score = f1_score(y[va_idx], pred, average="macro")
             fold_scores.append(float(score))
             print(f"fold {fold}: macro_f1={score:.5f}")
+
+            if oof_proba is not None:
+                proba_va = model.predict_proba(X.iloc[va_idx])
+                clf_classes = model.named_steps["clf"].classes_
+                idx = {int(c): i for i, c in enumerate(clf_classes)}
+                aligned_va = np.zeros((len(va_idx), classes.shape[0]), dtype=np.float64)
+                for j, c in enumerate(classes):
+                    aligned_va[:, j] = proba_va[:, idx[int(c)]]
+                oof_proba[va_idx] = aligned_va
 
             if do_predict and args.predict_strategy == "fold_ensemble":
                 proba = model.predict_proba(X_test)
@@ -290,10 +305,10 @@ def main() -> None:
         print(f"OOF macro_f1={oof_score:.5f} | mean={np.mean(fold_scores):.5f} std={np.std(fold_scores):.5f}")
 
         if not do_predict:
-            return oof_score, None, oof
+            return oof_score, None, oof, None
 
         if args.predict_strategy == "fold_ensemble":
-            return oof_score, test_proba_sum / args.n_splits, oof
+            return oof_score, test_proba_sum / args.n_splits, oof, oof_proba
 
         final_model = make_model(seed=args.seed, **cfg)
         final_model.fit(X, y)
@@ -303,7 +318,7 @@ def main() -> None:
         aligned = np.zeros((X_test.shape[0], classes.shape[0]), dtype=np.float64)
         for j, c in enumerate(classes):
             aligned[:, j] = proba[:, idx[int(c)]]
-        return oof_score, aligned, oof
+        return oof_score, aligned, oof, oof_proba
 
     def save_cv_artifacts(*, cfg: dict, oof_pred: np.ndarray, tag: str) -> None:
         if not args.save_artifacts:
@@ -391,14 +406,15 @@ def main() -> None:
             # Deterministic order (helps reproducibility)
             def _key(d: dict) -> tuple:
                 return (
-                    d.get("clf", "lr"),
                     d.get("char_ngram"),
                     d.get("word_ngram", (0, 0)),
                     int(d.get("min_df", 2)),
                     float(d.get("C", 4.0)),
                     int(d.get("char_max_features", 0)),
                     int(d.get("word_max_features", 0)),
+                    d.get("clf", "lr"),
                     float(d.get("alpha", 0.0)),
+                    int(d.get("calib_cv", 0)),
                 )
 
             char_only.sort(key=_key)
@@ -433,10 +449,36 @@ def main() -> None:
         scores: list[tuple[float, dict]] = []
         for i, cfg in enumerate(candidates, start=1):
             print(f"\n== Search config {i}/{len(candidates)}: {cfg} ==")
-            score, _, _oof = run_cv_and_maybe_predict(cfg, do_predict=False)
+            score, _, _oof, _ = run_cv_and_maybe_predict(cfg, do_predict=False)
             scores.append((score, cfg))
 
         scores.sort(key=lambda x: x[0], reverse=True)
+
+        # Deduplicate near-identical configs so the ensemble isn't wasted on the same model twice.
+        def _sig(cfg: dict) -> tuple:
+            return (
+                cfg.get("clf", "lr"),
+                bool(cfg.get("use_word", True)),
+                tuple(cfg.get("char_ngram", (0, 0))),
+                tuple(cfg.get("word_ngram", (0, 0))) if cfg.get("use_word", True) else None,
+                int(cfg.get("min_df", 0)),
+                float(cfg.get("C", 0.0)),
+                float(cfg.get("alpha", 0.0)),
+                int(cfg.get("calib_cv", 0)),
+            )
+
+        seen: set[tuple] = set()
+        uniq: list[tuple[float, dict]] = []
+        for s, cfg in scores:
+            sig = _sig(cfg)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            uniq.append((s, cfg))
+        if len(uniq) < len(scores):
+            print(f"\nDeduped configs: {len(scores)} -> {len(uniq)}")
+            scores = uniq
+
         print("\n== Search results ==")
         for s, cfg in scores:
             print(f"macro_f1={s:.5f} cfg={cfg}")
@@ -444,25 +486,31 @@ def main() -> None:
         top_k = max(1, min(int(args.ensemble_top_k), len(scores)))
         print(f"\nUsing top_k={top_k} for test prediction.")
         test_proba_sum = np.zeros((X_test.shape[0], classes.shape[0]), dtype=np.float64)
+        oof_proba_sum = np.zeros((X.shape[0], classes.shape[0]), dtype=np.float64) if args.save_oof_proba else None
 
         for rank in range(top_k):
             cfg = scores[rank][1]
             print(f"\n== Predicting with config rank {rank+1}: {cfg} ==")
-            score, proba, oof_pred = run_cv_and_maybe_predict(cfg, do_predict=True)
+            score, proba, oof_pred, oof_proba = run_cv_and_maybe_predict(cfg, do_predict=True)
             assert proba is not None
             test_proba_sum += proba
+            if oof_proba_sum is not None:
+                assert oof_proba is not None
+                oof_proba_sum += oof_proba
             save_cv_artifacts(cfg=cfg, oof_pred=oof_pred, tag=f"rank{rank+1}_macro{score:.5f}")
 
         test_pred = classes[np.argmax(test_proba_sum / top_k, axis=1)]
         final_proba = test_proba_sum / top_k
+        final_oof_proba = (oof_proba_sum / top_k) if oof_proba_sum is not None else None
         out_name = f"submission_social_best_top{top_k}.csv"
     else:
         cfg = {"use_word": use_word, "C": float(args.C)}
         print(f"\n== Single config: {cfg} ==")
-        score, proba, oof_pred = run_cv_and_maybe_predict(cfg, do_predict=True)
+        score, proba, oof_pred, oof_proba = run_cv_and_maybe_predict(cfg, do_predict=True)
         assert proba is not None
         test_pred = classes[np.argmax(proba, axis=1)]
         final_proba = proba
+        final_oof_proba = oof_proba
         out_name = "submission_social_tfidf.csv"
         save_cv_artifacts(cfg=cfg, oof_pred=oof_pred, tag=f"single_macro{score:.5f}")
 
@@ -482,6 +530,20 @@ def main() -> None:
         }
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Saved test proba: {npy_path} + {meta_path}")
+
+    if args.save_oof_proba:
+        if final_oof_proba is None:
+            raise RuntimeError("final_oof_proba is None (this should not happen when --save_oof_proba is set).")
+        npy_path = out_dir / (out_name.replace(".csv", "_oof_proba.npy"))
+        meta_path = out_dir / (out_name.replace(".csv", "_oof_proba_meta.json"))
+        np.save(npy_path, final_oof_proba.astype(np.float32))
+        meta = {
+            "classes": [int(c) for c in classes.tolist()],
+            "source": "train_social_tfidf.py",
+            "out_csv": out_name,
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Saved OOF proba: {npy_path} + {meta_path}")
 
 
 if __name__ == "__main__":

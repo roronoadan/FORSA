@@ -114,6 +114,7 @@ def main() -> None:
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--fold_ensemble", action="store_true", help="Train K folds and average probabilities for test.")
     ap.add_argument("--save_test_proba", action="store_true", help="Save test probabilities to .npy for blending.")
+    ap.add_argument("--save_oof_proba", action="store_true", help="Save OOF probabilities to .npy for blend-weight tuning.")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -171,6 +172,7 @@ def main() -> None:
 
     test_proba_sum = np.zeros((len(X_test), num_labels), dtype=np.float64)
     oof_pred = np.zeros_like(y)
+    oof_proba = np.zeros((len(y), num_labels), dtype=np.float64) if args.save_oof_proba else None
     fold_scores: list[float] = []
 
     # If not ensembling folds, just use fold 1 split for validation then refit full data.
@@ -228,6 +230,8 @@ def main() -> None:
         val_logits = trainer.predict(val_ds).predictions
         val_pred = np.argmax(val_logits, axis=1)
         oof_pred[va_idx] = val_pred
+        if oof_proba is not None:
+            oof_proba[va_idx] = torch.softmax(torch.from_numpy(val_logits), dim=1).numpy()
         fold_f1 = float(f1_score(y[va_idx], val_pred, average="macro"))
         fold_scores.append(fold_f1)
 
@@ -294,6 +298,15 @@ def main() -> None:
         meta = {"classes": [int(lm.id_to_label[i]) for i in range(num_labels)], "source": "train_social_transformer.py"}
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Saved test proba: {npy_path} + {meta_path}")
+
+    if args.save_oof_proba:
+        assert oof_proba is not None
+        npy_path = out_dir / "submission_social_transformer_oof_proba.npy"
+        meta_path = out_dir / "submission_social_transformer_oof_proba_meta.json"
+        np.save(npy_path, oof_proba.astype(np.float32))
+        meta = {"classes": [int(lm.id_to_label[i]) for i in range(num_labels)], "source": "train_social_transformer.py"}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Saved OOF proba: {npy_path} + {meta_path}")
 
 
 if __name__ == "__main__":

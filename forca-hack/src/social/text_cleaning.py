@@ -55,7 +55,8 @@ _ARABIC_CHAR_MAP = str.maketrans(
 _URL_RE = re.compile(r"(https?://\S+|www\.\S+)", flags=re.IGNORECASE)
 _MENTION_RE = re.compile(r"@\w+", flags=re.UNICODE)
 _HASHTAG_RE = re.compile(r"#(\w+)", flags=re.UNICODE)
-_PHONE_RE = re.compile(r"\b(?:0|\+?213)\s*[\d\s\-]{8,}\b")
+# More precise phone regex for Algeria: starts with 0 or +213, followed by mobile/landline patterns
+_PHONE_RE = re.compile(r"\b(?:\+?213|0)[\s\-]?[567]\d{2}[\s\-]?\d{2}[\s\-]?\d{2}[\s\-]?\d{2}\b")
 _MULTI_SPACE_RE = re.compile(r"\s+")
 _MULTI_PUNCT_RE = re.compile(r"([!?.,;:])\1{1,}")
 _MULTI_CHAR_RE = re.compile(r"(.)\1{2,}", flags=re.UNICODE)  # 3+ repeats -> 2 repeats
@@ -83,6 +84,9 @@ class TextNormConfig:
     arabizi_map_digits: bool = True  # 3->ع, 7->ح, 9->ق ... (common Maghrebi Arabizi)
 
 
+# IMPORTANT: Arabizi mapping is DISABLED by default now.
+# Mapping digits globally destroys numeric information (prices, dates, quantities).
+# Only enable if you're sure the text is pure Arabizi with no real numbers.
 _ARABIZI_DIGIT_MAP = str.maketrans(
     {
         "2": "ء",
@@ -95,6 +99,10 @@ _ARABIZI_DIGIT_MAP = str.maketrans(
         "9": "ق",
     }
 )
+
+# Smarter Arabizi detection: only map digits when adjacent to Latin letters
+# (e.g., "sa7a", "3lach"), which avoids corrupting real numbers like "2023", "1000 DA", phone numbers.
+_ARABIZI_CONTEXT_RE = re.compile(r"(?:(?<=[A-Za-z])[2-9]|[2-9](?=[A-Za-z]))")
 
 
 def has_arabic(text: str) -> bool:
@@ -185,9 +193,15 @@ def normalize_text(text: str, cfg: TextNormConfig | None = None) -> str:
         nfkd = unicodedata.normalize("NFKD", text)
         text = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
 
-    # Arabizi digit mapping (we only do it if digits exist and cfg says so)
+    # Arabizi digit mapping - NOW CONTEXT-AWARE to avoid destroying real numbers
+    # Only map digits that are surrounded by Latin letters (like "sa7a", "3lach")
     if cfg.arabizi_map_digits:
-        text = text.translate(_ARABIZI_DIGIT_MAP)
+        # Context-aware replacement: only digits between Latin letters
+        def _arabizi_repl(m: re.Match) -> str:
+            digit = m.group(0)
+            mapping = {"2": "ء", "3": "ع", "4": "ش", "5": "خ", "6": "ط", "7": "ح", "8": "ق", "9": "ق"}
+            return mapping.get(digit, digit)
+        text = _ARABIZI_CONTEXT_RE.sub(_arabizi_repl, text)
 
     if not cfg.keep_digits:
         text = re.sub(r"\d+", " ", text)

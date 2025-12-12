@@ -90,8 +90,9 @@ def preprocess_social_df(
     # Multi-view text: helps with code-switching (Darija Arabic script + French Latin script).
     out["text_ar"] = out["text_clean"].map(keep_only_arabic)
     out["text_lat"] = out["text_clean"].map(keep_only_latin)
-    out["has_ar"] = raw.map(has_arabic).astype(int)
-    out["has_lat"] = raw.map(has_latin).astype(int)
+    # FIX: Use text_clean consistently (not raw) to avoid train/test mismatch
+    out["has_ar"] = out["text_clean"].map(has_arabic).astype(int)
+    out["has_lat"] = out["text_clean"].map(has_latin).astype(int)
     # Lightweight signals (as tokens later): punctuation & digits are often class-correlated
     out["n_exclam"] = raw.str.count("!")
     out["n_question"] = raw.str.count(r"\?")

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.pipeline import FeatureUnion
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold
@@ -119,6 +120,8 @@ def make_model(
     word_ngram: tuple[int, int] = (1, 2),
     min_df: int = 2,
     C: float = 4.0,
+    clf: str = "lr",
+    alpha: float = 1e-5,
 ) -> Pipeline:
     if use_word:
         feats = FeatureUnion(
@@ -140,15 +143,31 @@ def make_model(
     else:
         feats = make_vectorizer("char", max_features=char_max_features, ngram_range=char_ngram, min_df=min_df)
 
-    clf = LogisticRegression(
-        max_iter=4000,
-        n_jobs=-1,
-        class_weight="balanced",
-        random_state=seed,
-        solver="saga",
-        C=C,
-    )
-    return Pipeline([("tfidf", feats), ("clf", clf)])
+    if clf == "lr":
+        classifier = LogisticRegression(
+            max_iter=4000,
+            n_jobs=-1,
+            class_weight="balanced",
+            random_state=seed,
+            solver="saga",
+            C=C,
+        )
+    elif clf == "sgd":
+        # Fast linear model that often complements LR in ensembles.
+        # log_loss => predict_proba available (needed for blending).
+        classifier = SGDClassifier(
+            loss="log_loss",
+            alpha=float(alpha),
+            penalty="l2",
+            max_iter=2000,
+            tol=1e-3,
+            random_state=seed,
+            class_weight="balanced",
+        )
+    else:
+        raise ValueError(f"Unknown clf: {clf} (expected 'lr' or 'sgd')")
+
+    return Pipeline([("tfidf", feats), ("clf", classifier)])
 
 
 def main() -> None:
@@ -311,19 +330,39 @@ def main() -> None:
             char_feats = [200_000, 300_000] if args.search_mode == "medium" else [200_000, 300_000, 400_000]
             word_feats = [80_000, 120_000] if args.search_mode == "medium" else [80_000, 120_000, 180_000]
 
-            candidates = []
+            char_only: list[dict] = []
+            char_word: list[dict] = []
 
             # Char-only configs
             for C, min_df, char_ngram, cfeat in itertools.product(Cs, min_dfs, char_ngrams, char_feats):
-                candidates.append(
-                    {"use_word": False, "char_ngram": char_ngram, "min_df": int(min_df), "C": float(C), "char_max_features": int(cfeat)}
+                char_only.append(
+                    {
+                        "use_word": False,
+                        "char_ngram": char_ngram,
+                        "min_df": int(min_df),
+                        "C": float(C),
+                        "char_max_features": int(cfeat),
+                        "clf": "lr",
+                    }
+                )
+                # Add a complementary classifier variant for ensembles
+                char_only.append(
+                    {
+                        "use_word": False,
+                        "char_ngram": char_ngram,
+                        "min_df": int(min_df),
+                        "C": float(C),
+                        "char_max_features": int(cfeat),
+                        "clf": "sgd",
+                        "alpha": 1e-5,
+                    }
                 )
 
             # Char+word configs (keep word settings moderate)
             for C, min_df, char_ngram, word_ngram, cfeat, wfeat in itertools.product(
                 Cs, min_dfs, char_ngrams, word_ngrams, char_feats, word_feats
             ):
-                candidates.append(
+                char_word.append(
                     {
                         "use_word": True,
                         "char_ngram": char_ngram,
@@ -332,16 +371,64 @@ def main() -> None:
                         "C": float(C),
                         "char_max_features": int(cfeat),
                         "word_max_features": int(wfeat),
+                        "clf": "lr",
+                    }
+                )
+                char_word.append(
+                    {
+                        "use_word": True,
+                        "char_ngram": char_ngram,
+                        "word_ngram": word_ngram,
+                        "min_df": int(min_df),
+                        "C": float(C),
+                        "char_max_features": int(cfeat),
+                        "word_max_features": int(wfeat),
+                        "clf": "sgd",
+                        "alpha": 1e-5,
                     }
                 )
 
             # Deterministic order (helps reproducibility)
-            candidates.sort(key=lambda d: (d["use_word"], d.get("char_ngram"), d.get("word_ngram", (0, 0)), d["min_df"], d["C"]))
-            # Safety cap to keep runtime bounded
-            cap = 60 if args.search_mode == "medium" else 120
-            if len(candidates) > cap:
-                candidates = candidates[:cap]
-            print(f"Search mode={args.search_mode} candidates={len(candidates)}")
+            def _key(d: dict) -> tuple:
+                return (
+                    d.get("clf", "lr"),
+                    d.get("char_ngram"),
+                    d.get("word_ngram", (0, 0)),
+                    int(d.get("min_df", 2)),
+                    float(d.get("C", 4.0)),
+                    int(d.get("char_max_features", 0)),
+                    int(d.get("word_max_features", 0)),
+                    float(d.get("alpha", 0.0)),
+                )
+
+            char_only.sort(key=_key)
+            char_word.sort(key=_key)
+
+            # Safety cap to keep runtime bounded, but **preserve both groups**
+            cap = 80 if args.search_mode == "medium" else 160
+            half = cap // 2
+            char_only_sel = char_only[:half]
+            char_word_sel = char_word[:half]
+            # If one side is short, refill from the other
+            if len(char_only_sel) < half:
+                need = half - len(char_only_sel)
+                char_word_sel = char_word[: half + need]
+            if len(char_word_sel) < half:
+                need = half - len(char_word_sel)
+                char_only_sel = char_only[: half + need]
+
+            # Interleave so early search isn't biased
+            candidates = []
+            for a, b in itertools.zip_longest(char_only_sel, char_word_sel):
+                if a is not None:
+                    candidates.append(a)
+                if b is not None:
+                    candidates.append(b)
+
+            print(
+                f"Search mode={args.search_mode} candidates={len(candidates)} "
+                f"(char_only={len(char_only_sel)}, char_word={len(char_word_sel)})"
+            )
 
         scores: list[tuple[float, dict]] = []
         for i, cfg in enumerate(candidates, start=1):
